@@ -6,20 +6,16 @@ description = "Visualize a TCT in action"
 version = {workspace = true}
 license = {workspace = true}
 edition = {workspace = true}
+publish = false
 
 [package.metadata.dist]
 dist = false
 
 [[bin]]
 name = "tct-visualize"
-authors = {workspace = true}
-repository = {workspace = true}
 
 [[bin]]
 name = "tct-live-edit"
-authors = {workspace = true}
-repository = {workspace = true}
-
 
 [dependencies]
 penumbra-sdk-tct = {workspace = true, features = ["arbitrary"], default-features = true}

@@ -9,10 +9,7 @@ edition = {workspace = true}
 
 [[bench]]
 name = "all"
-authors = {workspace = true}
-repository = {workspace = true}
 harness = false
-
 
 [features]
 default = []
