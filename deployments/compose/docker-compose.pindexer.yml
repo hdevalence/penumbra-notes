@@ -1,0 +1,82 @@
+version: "3.7"
+services:
+  postgresql:
+    image: "postgres:16"
+    environment:
+      POSTGRES_USER: penumbra
+      POSTGRES_PASSWORD: penumbra
+      POSTGRES_DB: penumbra
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U penumbra"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  init-downloads:
+    image: "debian:bookworm-slim"
+    volumes:
+      - downloads:/downloads
+    command: >
+      sh -c "
+        apt-get update && apt-get install -y curl gzip &&
+        echo 'Downloading CometBFT database dump...' &&
+        curl -L https://artifacts.plinfra.net/penumbra-testnet-phobos-2/cometbft-dbdump-height-1474837.dump -o /downloads/cometbft.dump &&
+        echo 'Downloading genesis file...' &&
+        curl -L https://artifacts.plinfra.net/penumbra-testnet-phobos-2/genesis-0.json -o /downloads/genesis.json
+      "
+
+  postgresql-init:
+    image: "postgres:16"
+    environment:
+      PGUSER: penumbra
+      PGHOST: postgresql
+      PGPASSWORD: penumbra
+    volumes:
+      - downloads:/downloads
+    command: >
+      sh -c "
+        echo 'Waiting for PostgreSQL to be ready...' &&
+        until PGPASSWORD=penumbra pg_isready -h postgresql -U penumbra; do
+          >&2 echo 'PostgreSQL is unavailable - sleeping'
+          sleep 1
+        done &&
+        echo 'PostgreSQL is up - executing commands' &&
+        dropdb -h postgresql -p 5432 -U penumbra --if-exists penumbra_cometbft &&
+        dropdb -h postgresql -p 5432 -U penumbra --if-exists penumbra_pindexer &&
+        createdb -h postgresql -p 5432 -U penumbra penumbra_cometbft &&
+        createdb -h postgresql -p 5432 -U penumbra penumbra_pindexer &&
+        echo 'Restoring CometBFT database...' &&
+        pg_restore -h postgresql -p 5432 -U penumbra -d penumbra_cometbft /downloads/cometbft.dump &&
+        createuser -h postgresql -p 5432 -U penumbra penumbra_ro || true &&
+        psql -h postgresql -p 5432 -U penumbra -d penumbra_cometbft -c 'GRANT pg_read_all_data TO penumbra_ro;' &&
+        psql -h postgresql -p 5432 -U penumbra -d penumbra_pindexer -c 'GRANT pg_write_all_data TO penumbra_ro;' &&
+        psql -h postgresql -p 5432 -U penumbra -d penumbra_pindexer -c 'GRANT ALL PRIVILEGES ON DATABASE penumbra_pindexer TO penumbra_ro;'
+      "
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      init-downloads:
+        condition: service_completed_successfully
+
+  pindexer:
+    platform: "linux/amd64"
+    build:
+      context: ../..
+      dockerfile: deployments/containerfiles/Dockerfile
+    environment:
+      - "RUST_LOG=debug"
+    volumes:
+      - downloads:/downloads:ro
+    command: >
+      /bin/pindexer
+      --src-database-url "postgresql://penumbra:penumbra@postgresql:5432/penumbra_cometbft?sslmode=disable"
+      --dst-database-url "postgresql://penumbra:penumbra@postgresql:5432/penumbra_pindexer?sslmode=disable"
+      --genesis-json /downloads/genesis.json
+    depends_on:
+      postgresql-init:
+        condition: service_completed_successfully
+
+volumes:
+  downloads: 
